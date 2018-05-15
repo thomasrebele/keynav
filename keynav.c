@@ -21,7 +21,6 @@
 #include <X11/keysym.h>
 #include <X11/extensions/shape.h>
 #include <X11/extensions/Xinerama.h>
-#include <X11/extensions/Xrandr.h>
 #include <glib.h>
 #include <cairo-xlib.h>
 
@@ -141,6 +140,11 @@ void cmd_cut_down(char *args);
 void cmd_cut_left(char *args);
 void cmd_cut_right(char *args);
 void cmd_cut_up(char *args);
+void cmd_enlarge(char *args);
+void cmd_enlarge_up(char *args);
+void cmd_enlarge_down(char *args);
+void cmd_enlarge_left(char *args);
+void cmd_enlarge_right(char *args);
 void cmd_daemonize(char *args);
 void cmd_doubleclick(char *args);
 void cmd_drag(char *args);
@@ -149,6 +153,7 @@ void cmd_toggle_start(char *args);
 void cmd_grid(char *args);
 void cmd_grid_nav(char *args);
 void cmd_history_back(char *args);
+void cmd_info(char *args);
 void cmd_loadconfig(char *args);
 void cmd_move_down(char *args);
 void cmd_move_left(char *args);
@@ -204,6 +209,11 @@ dispatch_t dispatch[] = {
   "cut-down", cmd_cut_down,
   "cut-left", cmd_cut_left,
   "cut-right", cmd_cut_right,
+  "enlarge", cmd_enlarge,
+  "enlarge-up", cmd_enlarge_up,
+  "enlarge-down", cmd_enlarge_down,
+  "enlarge-left", cmd_enlarge_left,
+  "enlarge-right", cmd_enlarge_right,
   "move-up", cmd_move_up,
   "move-down", cmd_move_down,
   "move-left", cmd_move_left,
@@ -234,6 +244,7 @@ dispatch_t dispatch[] = {
   "restart", cmd_restart,
   "record", cmd_record,
   "playback", cmd_playback,
+  "info", cmd_info,
   NULL, NULL,
 };
 
@@ -329,9 +340,8 @@ int parse_mods(char *keyseq) {
       modmask |= Mod4Mask;
     if (!strcasecmp(mod, "mod1"))
       modmask |= Mod1Mask;
-    // See masking of state in handle_keypress
     if (!strcasecmp(mod, "mod2"))
-      printf("Error in configuration: keynav does not support mod2 modifier, but other modifiers are supported.");
+      modmask |= Mod2Mask;
     if (!strcasecmp(mod, "mod3"))
       modmask |= Mod3Mask;
     if (!strcasecmp(mod, "mod4"))
@@ -628,6 +638,19 @@ int parse_config_line(char *orig_line) {
   return 0;
 }
 
+int multiply_by(int num, char *args, float default_val) {
+  static float precision = 100000.0;
+  float pct = 0.0;
+  int value = 0;
+
+  /* Parse a float. If this fails, assume the default value */
+  if (sscanf(args, "%f", &pct) <= 0)
+    pct = default_val;
+
+  value = (int)((num * (pct * precision)) / precision);
+  return value;
+}
+
 int percent_of(int num, char *args, float default_val) {
   static float precision = 100000.0;
   float pct = 0.0;
@@ -855,14 +878,14 @@ void updategridtext(Window win, struct wininfo *info, int apply_clip, int draw) 
       pathcopy = cairo_copy_path(canvas_cairo);
       cairo_set_line_width(shape_cairo, 2);
 
-      cairo_set_source_rgb(canvas_cairo, 0, .2, 0);
+      cairo_set_source_rgb(canvas_cairo, 0.7, 1, 0.7);
       cairo_fill(canvas_cairo);
       cairo_append_path(canvas_cairo, pathcopy);
-      cairo_set_source_rgb(canvas_cairo, .8, .8, 0);
+      cairo_set_source_rgb(canvas_cairo, 0.5, 0.5, 0);
       cairo_stroke(canvas_cairo);
       cairo_path_destroy(pathcopy);
 
-      cairo_set_source_rgb(canvas_cairo, .8, .8, .8);
+      cairo_set_source_rgb(canvas_cairo, 0, 0, 0);
       cairo_fill(canvas_cairo);
       cairo_move_to(canvas_cairo, xpos - te.width / 2, ypos);
       cairo_show_text(canvas_cairo, label);
@@ -1100,6 +1123,47 @@ void cmd_cut_right(char *args) {
   wininfo.x += orig - wininfo.w;
 }
 
+/** Make grid bigger */
+void cmd_enlarge(char *args) {
+  if (!ISACTIVE)
+    return;
+  int orig_h = wininfo.h;
+  int orig_w = wininfo.w;
+  wininfo.w = multiply_by(wininfo.w, args, 2.);
+  wininfo.h = multiply_by(wininfo.h, args, 2.);
+  wininfo.x += orig_w/2 - wininfo.w/2;
+  wininfo.y += orig_h/2 - wininfo.h/2;
+
+}
+
+void cmd_enlarge_up(char *args) {
+  if (!ISACTIVE)
+    return;
+  int orig = wininfo.h;
+  wininfo.h = multiply_by(wininfo.h, args, 2.);
+  wininfo.y -= orig;
+}
+
+void cmd_enlarge_down(char *args) {
+  if (!ISACTIVE)
+    return;
+  wininfo.h = multiply_by(wininfo.h, args, 2.);
+}
+
+void cmd_enlarge_left(char *args) {
+  if (!ISACTIVE)
+    return;
+  int orig = wininfo.w;
+  wininfo.w = multiply_by(wininfo.w, args, 2.);
+  wininfo.x -= orig;
+}
+
+void cmd_enlarge_right(char *args) {
+  if (!ISACTIVE)
+    return;
+  wininfo.w = multiply_by(wininfo.w, args, 2.);
+}
+
 void cmd_move_up(char *args) {
   if (!ISACTIVE)
     return;
@@ -1155,17 +1219,15 @@ void cmd_windowzoom(char *args) {
   unsigned int width, height, border_width, depth;
 
   xdo_get_active_window(xdo, &curwin);
-  if (curwin) {
-    XGetGeometry(xdo->xdpy, curwin, &rootwin, &x, &y, &width, &height,
-                 &border_width, &depth);
-    XTranslateCoordinates(xdo->xdpy, curwin, rootwin,
-                          -border_width, -border_width, &x, &y, &dummy_win);
+  XGetGeometry(xdo->xdpy, curwin, &rootwin, &x, &y, &width, &height,
+               &border_width, &depth);
+  XTranslateCoordinates(xdo->xdpy, curwin, rootwin,
+                        -border_width, -border_width, &x, &y, &dummy_win);
 
-    wininfo.x = x;
-    wininfo.y = y;
-    wininfo.w = width;
-    wininfo.h = height;
-  }
+  wininfo.x = x;
+  wininfo.y = y;
+  wininfo.w = width;
+  wininfo.h = height;
 }
 
 void cmd_warp(char *args) {
@@ -1356,6 +1418,13 @@ void cmd_playback(char *args) {
   appstate.playback = 1;
 }
 
+void cmd_info(char *args) {
+  printf("window pos %d,%d, size %dx%d\n", wininfo.x, wininfo.y, wininfo.w, wininfo.h);
+  int xloc, yloc;
+  xdo_get_mouse_location(xdo, &xloc, &yloc, NULL);
+  printf("mouse pos %d,%d\n", xloc, yloc);
+}
+
 void cmd_record(char *args) {
   char *filename;
   if (!ISACTIVE)
@@ -1539,10 +1608,16 @@ void viewport_left() {
 
 void handle_keypress(XKeyEvent *e) {
   int i;
+  /* If a mouse button is pressed (like, when we're dragging),
+   * then the 'mods' will include values like Button1Mask.
+   * Let's remove those, as they cause breakage */
+  e->state &= ~(Button1Mask | Button2Mask | Button3Mask | Button4Mask | Button5Mask);
 
-  /* Only pay attention to shift. In particular, things not included here are
-   * mouse buttons (active when dragging), numlock (including Mod2Mask) */
-  e->state &= (ShiftMask | ControlMask | Mod1Mask | Mod3Mask | Mod4Mask | Mod4Mask);
+  /* Ignore LockMask (Numlock, etc) and Mod2Mask (shift, etc) */
+  e->state &= ~(LockMask | Mod2Mask);
+
+  /* Ignore different keyboard layouts (e.g. russian) */
+  e->state &= ~(1<<13);
 
   if (appstate.recording == record_getkey) {
     if (handle_recording(e) == HANDLE_STOP) {
@@ -1715,7 +1790,7 @@ void handle_commands(char *commands) {
       g_ptr_array_add(active_recording->commands, (gpointer) strdup(tok));
     }
 
-    for (i = 0; dispatch[i].command && !found; i++) {
+    for (i = 0; dispatch[i].command; i++) {
       /* XXX: This approach means we can't have one command be a subset of
        * another. For example, 'grid' and 'grid-foo' will fail because when you
        * use 'grid-foo' it'll match 'grid' first.
@@ -1739,6 +1814,7 @@ void handle_commands(char *commands) {
 
         found = 1;
         dispatch[i].func(args);
+        break;
       }
     }
 
@@ -1815,7 +1891,6 @@ void query_screen_xinerama() {
   XineramaScreenInfo *screeninfo;
 
   screeninfo = XineramaQueryScreens(dpy, &nviewports);
-  free(viewports);
   viewports = calloc(nviewports, sizeof(viewport_t));
   for (i = 0; i < nviewports; i++) {
     viewports[i].x = screeninfo[i].x_org;
@@ -1833,7 +1908,6 @@ void query_screen_normal() {
   int i;
   Screen *s;
   nviewports = ScreenCount(dpy);
-  free(viewports);
   viewports = calloc(nviewports, sizeof(viewport_t));
 
   for (i = 0; i < nviewports; i++) {
@@ -2054,15 +2128,6 @@ int main(int argc, char **argv) {
    * before we try to daemonize */
   XSync(dpy, 0);
 
-  /* If xrandr is enabled, ask to receive events for screen configuration
-   * changes. */
-  int xrandr_event_base = 0;
-  int xrandr_error_base = 0;
-  int xrandr = XRRQueryExtension (dpy, &xrandr_event_base, &xrandr_error_base);
-  if (xrandr) {
-    XRRSelectInput(dpy, DefaultRootWindow(dpy), RRScreenChangeNotifyMask);
-  }
-
   if (daemonize) {
     printf("Daemonizing now...\n");
     daemon(0, 0);
@@ -2115,11 +2180,7 @@ int main(int argc, char **argv) {
       case MappingNotify: // when keyboard mapping changes
         break;
       default:
-        if (e.type == xrandr_event_base + RRScreenChangeNotify) {
-          query_screens();
-        } else {
-          printf("Unexpected X11 event: %d\n", e.type);
-        }
+        printf("Unexpected X11 event: %d\n", e.type);
         break;
     }
   }
